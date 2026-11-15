@@ -2,9 +2,8 @@ name: Server test
 
 # Starts a real Forge server with the mod, builds an End Village in the End,
 # and checks the Shulker Villagers are there, have jobs and have trades.
+# Runs only when started by hand (Actions tab > Server test > Run workflow).
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
 
 jobs:
