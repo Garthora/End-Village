@@ -1,0 +1,11 @@
+{
+  "entity.endvillage.shulker_villager": "Shulker Villager",
+  "entity.endvillage.chorus_farmer": "Chorus Farmer",
+  "entity.endvillage.purpur_mason": "Purpur Mason",
+  "entity.endvillage.void_librarian": "Void Librarian",
+  "entity.endvillage.shell_keeper": "Shell Keeper",
+  "entity.endvillage.star_cartographer": "Star Cartographer",
+  "entity.endvillage.dragon_cleric": "Dragon Cleric",
+  "item.endvillage.shulker_villager_spawn_egg": "Shulker Villager Spawn Egg",
+  "filled_map.endvillage.end_city": "End City Map"
+}

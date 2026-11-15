@@ -1,0 +1,89 @@
+name: Server test
+
+# Starts a real Forge server with the mod, builds an End Village in the End,
+# and checks the Shulker Villagers are there, have jobs and have trades.
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  server-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build the mod
+        run: chmod +x ./gradlew && ./gradlew build --no-daemon
+      - name: Install a Forge server
+        run: |
+          MC=$(grep '^minecraft_version=' gradle.properties | cut -d= -f2)
+          FORGE=$(grep '^forge_version=' gradle.properties | cut -d= -f2)
+          curl -sSfL -o installer.jar "https://maven.minecraftforge.net/net/minecraftforge/forge/${MC}-${FORGE}/forge-${MC}-${FORGE}-installer.jar"
+          mkdir server && cd server && java -jar ../installer.jar --installServer > install.log 2>&1 && tail -2 install.log
+          mkdir -p mods && chmod +x run.sh
+          echo "eula=true" > eula.txt
+          printf "online-mode=false\nlevel-seed=12345\nspawn-protection=0\nmax-tick-time=-1\n" > server.properties
+          cp ../build/libs/$(grep '^jar_name=' ../gradle.properties | cut -d= -f2)-*.jar mods/
+          ls mods
+      - name: Build a village and check it
+        run: |
+          cat > cmds <<'C'
+          execute in minecraft:the_end run forceload add 960 -64 1100 64
+          wait 15
+          execute in minecraft:the_end run place structure endvillage:end_village 1000 64 0
+          wait 5
+          execute in minecraft:the_end run setblock 1090 100 40 end_stone
+          execute in minecraft:the_end run summon endvillage:shulker_villager 1090 101 40
+          wait 10
+          say COUNT villagers:
+          execute in minecraft:the_end if entity @e[type=endvillage:shulker_villager]
+          say COUNT hostile:
+          execute in minecraft:the_end if entity @e[type=minecraft:shulker]
+          execute in minecraft:the_end as @e[type=endvillage:shulker_villager] run data get entity @s Profession
+          execute in minecraft:the_end as @e[type=endvillage:shulker_villager] run data get entity @s Color
+          execute in minecraft:the_end as @e[type=endvillage:shulker_villager] run data get entity @s Offers.Recipes[0]
+          execute in minecraft:the_end as @e[type=endvillage:shulker_villager] run data get entity @s Pos
+          wait 20
+          say COUNT still there:
+          execute in minecraft:the_end if entity @e[type=endvillage:shulker_villager]
+          execute in minecraft:the_end run locate structure endvillage:end_village
+          wait 60
+          C
+          cd server; rm -f console; mkfifo console
+          ./run.sh nogui < console > test.log 2>&1 &
+          exec 3>console
+          for i in $(seq 1 120); do grep -q 'Done (' test.log && break; sleep 5; done
+          grep -q 'Done (' test.log || { tail -80 test.log; echo "Server did not start"; exit 1; }
+          while IFS= read -r line; do
+            case "$line" in wait*) sleep "${line#wait }";; *) echo "$line" >&3; sleep 3;; esac
+          done < ../cmds
+          echo stop >&3; sleep 25; exec 3>&-; wait || true
+          echo "======== results ========"
+          grep -E 'Generated structure|Test passed|Test failed|entity data|COUNT|nearest|Could not|Unknown|Incorrect' test.log | cut -c1-400
+          FAIL=0
+          grep -q 'Generated structure "endvillage:end_village"' test.log || { echo "FAIL: village was not placed"; FAIL=1; }
+          N=$(grep -A1 'COUNT villagers' test.log | grep -o 'Test passed, count: [0-9]*' | grep -o '[0-9]*$' | head -1)
+          echo "Shulker Villagers: ${N:-0}"
+          [ "${N:-0}" -ge 5 ] || { echo "FAIL: expected at least 5 Shulker Villagers (4+ in the village, 1 summoned)"; FAIL=1; }
+          grep -A1 'COUNT hostile' test.log | grep -q 'Test failed' || { echo "FAIL: a hostile shulker appeared"; FAIL=1; }
+          P=$(grep -c 'has the following entity data: "[a-z_]*"' test.log)
+          [ "$P" -ge 5 ] || { echo "FAIL: not every villager has a job ($P)"; FAIL=1; }
+          O=$(grep -c 'has the following entity data: {.*buy' test.log)
+          [ "$O" -ge 5 ] || { echo "FAIL: not every villager has trades ($O)"; FAIL=1; }
+          S=$(grep -A1 'COUNT still there' test.log | grep -o 'Test passed, count: [0-9]*' | grep -o '[0-9]*$' | head -1)
+          [ "${S:-0}" -ge "${N:-99}" ] || { echo "FAIL: villagers disappeared"; FAIL=1; }
+          grep -q 'nearest endvillage:end_village' test.log || echo "WARN: /locate did not find a village near spawn"
+          if grep -iE 'exception|error' test.log | grep -iE 'endvillage|shulker'; then echo "FAIL: errors in log"; FAIL=1; fi
+          exit $FAIL
+      - name: Upload server log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-log
+          path: server/*.log
