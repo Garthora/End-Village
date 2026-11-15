@@ -1,6 +1,8 @@
 package com.garthora.endvillage.entity;
 
 import com.garthora.endvillage.EndVillageMod;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
@@ -29,6 +31,8 @@ import net.minecraft.world.item.trading.MerchantOffer;
 import net.minecraft.world.item.trading.MerchantOffers;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.ServerLevelAccessor;
+import net.minecraft.world.level.gameevent.GameEvent;
+import net.minecraft.world.phys.Vec3;
 
 import javax.annotation.Nullable;
 import java.util.Optional;
@@ -39,6 +43,7 @@ import java.util.Optional;
  */
 public class ShulkerVillager extends Shulker implements Merchant {
     private static final long RESTOCK_TICKS = 12000L; // half a Minecraft day
+    private static final double TELEPORT_RANGE = 4.0;  // never jumps further than this
 
     @Nullable private EndProfession profession;
     @Nullable private Player tradingPlayer;
@@ -47,6 +52,7 @@ public class ShulkerVillager extends Shulker implements Merchant {
     private boolean triedMap;
     private int idlePeek;
     private int peekTimer;
+    private int teleportTimer = 200;
 
     public ShulkerVillager(EntityType<? extends ShulkerVillager> type, Level level) {
         super(type, level);
@@ -71,6 +77,16 @@ public class ShulkerVillager extends Shulker implements Merchant {
         }
 
         ensureOffers();
+
+        // Wander like an enderman: every 10-30 seconds, blink to a nearby spot.
+        // Stays put while trading or when a player is standing close by.
+        if (tradingPlayer == null && --teleportTimer <= 0) {
+            teleportTimer = 200 + random.nextInt(400);
+            if (level().getNearestPlayer(this, 4.0) == null) {
+                blinkNearby();
+            }
+        }
+
         if (tradingPlayer == null && this.tickCount % 100 == 0) {
             restockIfDue();
         }
@@ -115,6 +131,29 @@ public class ShulkerVillager extends Shulker implements Merchant {
         return InteractionResult.sidedSuccess(level().isClientSide);
     }
 
+    /** Teleports to a random free spot with solid ground, at most 4 blocks away. */
+    private boolean blinkNearby() {
+        BlockPos here = this.blockPosition();
+        for (int attempt = 0; attempt < 10; attempt++) {
+            BlockPos to = here.offset(random.nextInt(9) - 4, random.nextInt(5) - 2, random.nextInt(9) - 4);
+            if (to.equals(here) || Math.sqrt(to.distSqr(here)) > TELEPORT_RANGE) continue;
+            BlockPos below = to.below();
+            if (!level().getBlockState(below).isFaceSturdy(level(), below, Direction.UP)) continue;
+            if (!level().getFluidState(to).isEmpty()) continue;
+            if (!level().noCollision(this, this.getType().getAABB(to.getX() + 0.5, to.getY(), to.getZ() + 0.5))) continue;
+
+            Vec3 from = this.position();
+            this.entityData.set(DATA_ATTACH_FACE_ID, Direction.DOWN);
+            this.entityData.set(DATA_PEEK_ID, (byte) 0);
+            this.setPos(to.getX() + 0.5, to.getY(), to.getZ() + 0.5);
+            level().gameEvent(GameEvent.TELEPORT, from, GameEvent.Context.of(this));
+            level().broadcastEntityEvent(this, (byte) 46); // purple portal particles, like an enderman
+            this.playSound(SoundEvents.SHULKER_TELEPORT, 1.0F, 1.0F);
+            return true;
+        }
+        return false;
+    }
+
     private void ensureOffers() {
         if (offers == null && !level().isClientSide) {
             EndProfession p = getProfession();
@@ -142,7 +181,34 @@ public class ShulkerVillager extends Shulker implements Merchant {
         Entity direct = source.getDirectEntity();
         if (direct instanceof ShulkerBullet) return false;
         if (tradingPlayer != null && source.getEntity() == tradingPlayer) setTradingPlayer(null);
-        return super.hurt(source, amount);
+        Vec3 before = this.position();
+        Direction faceBefore = this.getAttachFace();
+        boolean result = super.hurt(source, amount);
+        keepJumpShort(before, faceBefore);
+        return result;
+    }
+
+    @Override
+    public void tick() {
+        Vec3 before = this.position();
+        Direction faceBefore = this.getAttachFace();
+        super.tick();
+        if (!level().isClientSide) keepJumpShort(before, faceBefore);
+    }
+
+    /** Vanilla shulkers can jump up to 8 blocks; swap any long jump for a short one. */
+    private void keepJumpShort(Vec3 before, Direction faceBefore) {
+        if (level().isClientSide || !this.isAlive()) return;
+        if (this.position().distanceTo(before) <= TELEPORT_RANGE + 0.01) return;
+        Vec3 landed = this.position();
+        Direction faceLanded = this.getAttachFace();
+        this.entityData.set(DATA_ATTACH_FACE_ID, faceBefore);
+        this.setPos(before.x, before.y, before.z);
+        if (!blinkNearby()) {
+            // Nowhere close to go (e.g. its floor was broken): keep the vanilla spot.
+            this.entityData.set(DATA_ATTACH_FACE_ID, faceLanded);
+            this.setPos(landed.x, landed.y, landed.z);
+        }
     }
 
     @Override

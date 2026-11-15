@@ -11,4 +11,4 @@ A Minecraft Forge 1.20.1 mod. Adds villages to the End, built on their own float
 | Star Cartographer | light blue | sells maps, compasses and an End City map |
 | Dragon Cleric | yellow | buys and sells ender pearls, sells dragon's breath and eyes of ender |
 
-Trades restock every half day. `tools/make_village.py` builds the village structure files.
+Shulker Villagers wander by teleporting to a nearby spot (at most 4 blocks) every 10–30 seconds, like endermen. They stay put while you trade or stand next to them. Trades restock every half day. `tools/make_village.py` builds the village structure files.
